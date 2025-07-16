@@ -122,7 +122,7 @@ else:
         ### 🎟️ Next Steps
         - Our team will verify your details.
         - You’ll be notified via call or SMS once it is booked.
-        - For urgent help, contact: **+91 98765 43210**
+        - For urgent help, contact: **+91 93834 96183** | **+91 97787 01912**
 
         [🔁 Make another request](?restart=true)
         """, unsafe_allow_html=True)
@@ -173,6 +173,6 @@ else:
     st.markdown("""
     <div style='text-align: center; margin-top: 40px; font-size: 0.8rem; color: #666;'>
         ©️ 2025 Vitatkal Booking System | Premium Railway Services<br>
-        For support: support@vitatkal.com | Phone: +91 98765 43210
+        For support: vitatkal@gmail.con | Phone: +91 93834 96183 | +91 97787 01912
     </div>
     """, unsafe_allow_html=True)
