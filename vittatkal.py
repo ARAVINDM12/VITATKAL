@@ -1,10 +1,11 @@
 import streamlit as st
 import pandas as pd
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+import pytz
 import time
 
 CSV_FILE = "vitatkal_requests.csv"
@@ -38,6 +39,16 @@ def mark_as_booked(index):
     df.at[index, "Status"] = "Booked ✅"
     df.to_csv(CSV_FILE, index=False)
 
+def mark_as_pending(index):
+    df = load_data()
+    df.at[index, "Status"] = "Pending"
+    df.to_csv(CSV_FILE, index=False)
+
+def delete_booking(index):
+    df = load_data()
+    df = df.drop(index=index)
+    df.to_csv(CSV_FILE, index=False)
+
 def send_email_notification(data):
     try:
         sender = st.secrets["email"]["sender"]
@@ -58,8 +69,10 @@ def send_email_notification(data):
             server.login(sender, password)
             server.send_message(msg)
         print("✅ Email sent successfully")
+        return True
     except Exception as e:
         print(f"❌ Failed to send email: {e}")
+        return False
 
 # Page config
 st.set_page_config("Vitatkal Booking System", layout="centered", page_icon="🚅")
@@ -83,30 +96,64 @@ if is_admin:
     st.title("🛡️ VITATKAL ADMIN PANEL")
     admin_pass = st.text_input("ENTER ADMIN ACCESS CODE", type="password")
 
-    if admin_pass == "EKx85dRzMrd4JdU":
+    if admin_pass == st.secrets["admin"]["pass"]:
         st.success("✅ ACCESS GRANTED")
         df = load_data()
 
         if df.empty:
             st.info("No bookings found.")
         else:
-            df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
-            df = df.dropna(subset=["Date"]).sort_values("Date", ascending=False)
-            grouped = df.groupby(df["Date"].dt.strftime("%Y-%m-%d"))
+            df["Date of Journey"] = pd.to_datetime(df["Date of Journey"], errors="coerce")
+            df = df.dropna(subset=["Date of Journey"])
+            df = df.sort_values("Date of Journey", ascending=False)
 
-            for date in sorted(grouped.groups.keys(), reverse=True):
+            # ----- 📊 Summary Dashboard -----
+            total = len(df)
+            pending = len(df[df["Status"] == "Pending"])
+            booked = len(df[df["Status"] == "Booked ✅"])
+            upcoming_dates = sorted(df["Date of Journey"].dt.strftime("%Y-%m-%d").unique())
+
+            st.markdown("## 📊 Summary Dashboard")
+            col1, col2, col3 = st.columns(3)
+            col1.metric("📋 Total Requests", total)
+            col2.metric("⏳ Pending", pending)
+            col3.metric("✅ Booked", booked)
+            st.markdown("---")
+
+            # ---------- Grouped View Below ----------
+            grouped = df.groupby(df["Date of Journey"].dt.strftime("%Y-%m-%d"))
+            for date in sorted(grouped.groups.keys()):
                 group = grouped.get_group(date)
                 st.markdown(f"### 📅 {date} — {len(group)} Request(s)")
-                for i, row in group.iterrows():
+                for _, row in group.iterrows():
                     status = row["Status"]
                     with st.expander(f"🎫 {row['Name']} — {status} | {row['Boarding Station']} → {row['Destination']}"):
-                        st.write({k: v for k, v in row.items() if k not in ["Date", "Status"]})
+                        cleaned_data = {k: v for k, v in row.items() if k not in ["Date", "Status"]}
+                        if isinstance(cleaned_data.get("Date of Journey"), pd.Timestamp):
+                            cleaned_data["Date of Journey"] = cleaned_data["Date of Journey"].strftime("%Y-%m-%d")
+                        for k, v in cleaned_data.items():
+                            st.markdown(f"- **{k}**: {v}")
+
+                        col1, col2, col3 = st.columns(3)
                         if row["Status"] != "Booked ✅":
-                            if st.button("✅ Mark as Booked", key=f"book_{i}"):
-                                mark_as_booked(i)
+                            if col1.button("✅ Mark as Booked", key=f"book_{row.name}"):
+                                mark_as_booked(row.name)
                                 st.success(f"Marked {row['Name']} as booked.")
                                 time.sleep(1)
                                 st.rerun()
+                        else:
+                            if col1.button("🔄 Mark as Pending", key=f"pending_{row.name}"):
+                                mark_as_pending(row.name)
+                                st.info(f"Marked {row['Name']} as pending.")
+                                time.sleep(1)
+                                st.rerun()
+
+                        if col3.button("🗑️ Delete Request", key=f"delete_{row.name}"):
+                            delete_booking(row.name)
+                            st.warning(f"Deleted booking for {row['Name']}")
+                            time.sleep(1)
+                            st.rerun()
+
     else:
         if admin_pass:
             st.error("⛔ ACCESS DENIED")
@@ -120,8 +167,8 @@ else:
         st.balloons()
         st.markdown("""
         ### 🎟️ Next Steps
-        - Our team will verify your details.
-        - You’ll be notified via call or SMS once it is booked.
+        - Our team will verify your details and contact you via Whatsapp.
+        - You’ll be notified via call or Whatsapp once it is booked.
         - For urgent help, contact: **+91 93834 96183** | **+91 97787 01912**
 
         [🔁 Make another request](?restart=true)
@@ -145,11 +192,20 @@ else:
             boarding = st.text_input("Boarding Station*")
         with col4:
             destination = st.text_input("Destination Station*")
-        doj = st.date_input("Date of Journey*", min_value=datetime.today())
+
+        india_tz = pytz.timezone("Asia/Kolkata")
+        now_ist = datetime.now(india_tz)
+        tomorrow = now_ist + timedelta(days=1)
+
+        doj = st.date_input("Date of Journey*", value=tomorrow.date(), min_value=now_ist.date())
 
         submitted = st.form_submit_button("SUBMIT BOOKING REQUEST")
 
         if submitted:
+            if not phone.isdigit() or len(phone) != 10:
+                st.error("❌ Invalid phone number")
+                st.stop()
+
             if name and phone and boarding and destination:
                 data = {
                     "Name": name,
@@ -160,19 +216,21 @@ else:
                     "Destination": destination,
                     "Phone": phone,
                     "Date of Journey": doj.strftime("%Y-%m-%d"),
-                    "Date": datetime.now().strftime("%Y-%m-%d"),
+                    "Date": now_ist.strftime("%Y-%m-%d"),
                     "Status": "Pending"
                 }
                 save_booking(data)
-                send_email_notification(data)
-                st.session_state.submitted = True
-                st.rerun()
+                if send_email_notification(data):
+                    st.session_state.submitted = True
+                    st.rerun()
+                else:
+                    st.warning("⚠️ Booking saved but failed to send email notification.")
             else:
                 st.error("❌ Please fill all required fields")
 
     st.markdown("""
     <div style='text-align: center; margin-top: 40px; font-size: 0.8rem; color: #666;'>
         ©️ 2025 Vitatkal Booking System | Premium Railway Services<br>
-        For support: vitatkal@gmail.con | Phone: +91 93834 96183 | +91 97787 01912
+        For support: vitatkal@gmail.com | Phone: +91 93834 96183 | +91 97787 01912
     </div>
     """, unsafe_allow_html=True)
