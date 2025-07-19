@@ -184,7 +184,7 @@ else:
             gender = st.selectbox("Gender*", ["Male", "Female", "Other"])
         with col2:
             phone = st.text_input("Mobile Number*")
-            train_class = st.selectbox("Class*", ["Sleeper", "3A", "2A", "1A", "CC", "2S"])
+            train_class = st.selectbox("Class*", ["Sleeper", "3A","3E", "2A", "1A", "CC", "2S"])
 
         st.subheader("🚉 Journey Details")
         col3, col4 = st.columns(2)
