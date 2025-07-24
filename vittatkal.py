@@ -9,13 +9,7 @@ import pytz
 import time
 
 
-st.set_page_config(
-    page_title="Vitatkal Booking System",
-    page_icon="🚆",
-    layout="centered"
-)
 
-st.title("🚆 Vitatkal Railway Booking System")
 CSV_FILE = "vitatkal_requests.csv"
 
 # Initialize CSV
