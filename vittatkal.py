@@ -149,8 +149,6 @@ if is_admin:
                 pending = df[df["Status"] == "Pending"]["GroupID"].nunique()
                 booked = df[df["Status"] == "Booked ✅"]["GroupID"].nunique()
 
-                upcoming_dates = sorted(df["Date of Journey"].dt.strftime("%Y-%m-%d").unique())
-
                 st.markdown("## 📋 Booking Requests")
                 col1, col2, col3 = st.columns(3)
                 col1.metric("📋 Total Requests", total)
@@ -158,114 +156,120 @@ if is_admin:
                 col3.metric("✅ Booked", booked)
                 st.markdown("---")
 
-                grouped = df.groupby("GroupID")
-                for group_id, group in grouped:
-                    main_row = group.iloc[0]
-                    with st.expander(f"🎫 {main_row['Name']} — {main_row['Status']} | {main_row['Boarding Station']} → {main_row['Destination']}"):
-                        for passenger_num, (_, row) in enumerate(group.iterrows(), start=1):
-                            st.markdown(f"### Passenger {passenger_num}")
-                            for k in ["Name", "Age", "Gender"]:
-                                st.markdown(f"- **{k}**: {row[k]}")
-                        st.markdown("---")
-                        for key in ["Class", "Boarding Station", "Destination", "Phone", "Date of Journey"]:
-                            st.markdown(f"**{key}**: {main_row[key]}")
+                # 🌟 Group by Date of Journey
+                grouped_by_date = df.groupby(df["Date of Journey"].dt.strftime("%Y-%m-%d"))
 
-                        col1, col2, col3 = st.columns(3)
-                        if main_row["Status"] != "Booked ✅":
-                            if f"show_agent_select_{group_id}" not in st.session_state:
-                                st.session_state[f"show_agent_select_{group_id}"] = False
+                for journey_date in sorted(grouped_by_date.groups.keys(), reverse=True):
+                    group_df = grouped_by_date.get_group(journey_date)
+                    grouped = group_df.groupby("GroupID")
+                    if grouped.ngroups == 0:
+                        continue  # ⛔️ Skip this date section if there are no groups
 
-                            cols = st.columns([2, 2, 1])
-                            col1, col2, col3 = cols
+                    st.markdown(f"### 📅 {journey_date} — {grouped.ngroups} Request(s)")
 
-                            if not st.session_state[f"show_agent_select_{group_id}"]:
-                                if col1.button("✅ Mark as Booked", key=f"book_btn_{group_id}"):
-                                    st.session_state[f"show_agent_select_{group_id}"] = True
-                                    st.rerun()
+
+                    for group_id, group in grouped:
+                        main_row = group.iloc[0]
+                        with st.expander(f"🎫 {main_row['Name']} — {main_row['Status']} | {main_row['Boarding Station']} → {main_row['Destination']}"):
+                            for passenger_num, (_, row) in enumerate(group.iterrows(), start=1):
+                                st.markdown(f"### Passenger {passenger_num}")
+                                for k in ["Name", "Age", "Gender"]:
+                                    st.markdown(f"- **{k}**: {row[k]}")
+                            st.markdown("---")
+                            for key in ["Class", "Boarding Station", "Destination", "Phone", "Date of Journey"]:
+                                st.markdown(f"**{key}**: {main_row[key]}")
+
+                            col1, col2, col3 = st.columns(3)
+                            if main_row["Status"] != "Booked ✅":
+                                if f"show_agent_select_{group_id}" not in st.session_state:
+                                    st.session_state[f"show_agent_select_{group_id}"] = False
+
+                                cols = st.columns([2, 2, 1])
+                                col1, col2, col3 = cols
+
+                                if not st.session_state[f"show_agent_select_{group_id}"]:
+                                    if col1.button("✅ Mark as Booked", key=f"book_btn_{group_id}"):
+                                        st.session_state[f"show_agent_select_{group_id}"] = True
+                                        st.rerun()
+                                else:
+                                    selected_agent = col1.selectbox(
+                                        "👤 Choose Agent", ["Aravind", "Nazmil", "Christy"],
+                                        key=f"agent_select_{group_id}"
+                                    )
+
+                                    passenger_count = len(group)
+                                    profit_input = col2.number_input(
+                                        "💰 Profit ₹",
+                                        value=passenger_count * 100,
+                                        step=10,
+                                        key=f"profit_input_{group_id}"
+                                    )
+
+                                    split_col1, split_col2, split_col3 = st.columns(3)
+                                    split_aravind = split_col1.slider("Aravind (%)", 0, 100, 50, key=f"split_aravind_{group_id}")
+                                    split_nazmil = split_col2.slider("Nazmil (%)", 0, 100, 25, key=f"split_nazmil_{group_id}")
+                                    split_christy = split_col3.slider("Christy (%)", 0, 100, 25, key=f"split_christy_{group_id}")
+
+                                    total_split = split_aravind + split_nazmil + split_christy
+                                    if total_split != 100:
+                                        st.warning("⚠️ Profit split must total 100%.")
+                                    else:
+                                        if col3.button("✅ Confirm", key=f"confirm_booked_{group_id}"):
+                                            # Mark as booked
+                                            df.loc[df["GroupID"] == group_id, "Status"] = "Booked ✅"
+                                            df.to_csv(CSV_FILE, index=False)
+
+                                            log_entry = {
+                                                "Customer Name": main_row["Name"],
+                                                "Date of Journey": pd.to_datetime(main_row["Date of Journey"]).strftime("%Y-%m-%d"),
+                                                "Agent": selected_agent,
+                                                "Profit": float(profit_input),
+                                                "Split_Aravind": split_aravind / 100,
+                                                "Split_Nazmil": split_nazmil / 100,
+                                                "Split_Christy": split_christy / 100
+                                            }
+
+                                            if os.path.exists(BOOKED_LOG_FILE):
+                                                log_df = pd.read_csv(BOOKED_LOG_FILE)
+                                            else:
+                                                log_df = pd.DataFrame(columns=["Customer Name", "Date of Journey", "Agent", "Profit"])
+
+                                            log_df = pd.concat([log_df, pd.DataFrame([log_entry])], ignore_index=True)
+                                            log_df.to_csv(BOOKED_LOG_FILE, index=False)
+
+                                            st.success(f"✅ Booked and assigned to {selected_agent}")
+                                            st.session_state[f"show_agent_select_{group_id}"] = False
+                                            st.rerun()
+
                             else:
-                                selected_agent = col1.selectbox(
-                                    "👤 Choose Agent", ["Aravind", "Nazmil", "Christy"],
-                                    key=f"agent_select_{group_id}"
-                                )
-
-                                passenger_count = len(group)
-                                profit_input = col2.number_input(
-                                    "💰 Profit ₹",
-                                    value=passenger_count * 100,
-                                    step=10,
-                                    key=f"profit_input_{group_id}"
-                                )
-                                split_col1, split_col2, split_col3 = st.columns(3)
-                                split_aravind = split_col1.slider("Aravind (%)", 0, 100, 50, key=f"split_aravind_{group_id}")
-                                split_nazmil = split_col2.slider("Nazmil (%)", 0, 100, 25, key=f"split_nazmil_{group_id}")
-                                split_christy = split_col3.slider("Christy (%)", 0, 100, 25, key=f"split_christy_{group_id}")
-
-                                total_split = split_aravind + split_nazmil + split_christy
-                                if total_split != 100:
-                                    st.warning("⚠️ Profit split must total 100%.")
-
-                                if col3.button("✅ Confirm", key=f"confirm_booked_{group_id}"):
-                                    # Mark as booked
-                                    df.loc[df["GroupID"] == group_id, "Status"] = "Booked ✅"
+                                if col1.button("🔄 Mark as Pending", key=f"pending_{group_id}"):
+                                    df.loc[df["GroupID"] == group_id, "Status"] = "Pending"
                                     df.to_csv(CSV_FILE, index=False)
-
-                                    # Log entry
-                                    log_entry = {
-                                        "Customer Name": main_row["Name"],
-                                        "Date of Journey": pd.to_datetime(main_row["Date of Journey"]).strftime("%Y-%m-%d"),
-                                        "Agent": selected_agent,
-                                        "Profit": float(profit_input),
-                                        "Split_Aravind": split_aravind / 100,
-                                        "Split_Nazmil": split_nazmil / 100,
-                                        "Split_Christy": split_christy / 100
-                                    }
-
 
                                     if os.path.exists(BOOKED_LOG_FILE):
                                         log_df = pd.read_csv(BOOKED_LOG_FILE)
-                                    else:
-                                        log_df = pd.DataFrame(columns=["Customer Name", "Date of Journey", "Agent", "Profit"])
+                                        updated_log = log_df[log_df["Customer Name"] != main_row["Name"]]
+                                        updated_log.to_csv(BOOKED_LOG_FILE, index=False)
 
-                                    log_df = pd.concat([log_df, pd.DataFrame([log_entry])], ignore_index=True)
-                                    log_df.to_csv(BOOKED_LOG_FILE, index=False)
-
-                                    st.success(f"✅ Booked and assigned to {selected_agent}")
-                                    st.session_state[f"show_agent_select_{group_id}"] = False
+                                    st.info(f"Marked group {group_id} as pending and removed log entry.")
+                                    time.sleep(1)
                                     st.rerun()
 
-                        else:
-                            if col1.button("🔄 Mark as Pending", key=f"pending_{group_id}"):
-                                df.loc[df["GroupID"] == group_id, "Status"] = "Pending"
-                                df.to_csv(CSV_FILE, index=False)
+                            if col3.button("🗑️ Delete Request", key=f"delete_{group_id}"):
+                                delete_booking(main_row.name)
 
-                                # Remove entry from booked_log.csv
                                 if os.path.exists(BOOKED_LOG_FILE):
                                     log_df = pd.read_csv(BOOKED_LOG_FILE)
-                                    updated_log = log_df[log_df["Customer Name"] != main_row["Name"]]
+                                    updated_log = log_df[~(
+                                        (log_df["Customer Name"] == main_row["Name"]) &
+                                        (log_df["Date of Journey"] == pd.to_datetime(main_row["Date of Journey"]).strftime("%Y-%m-%d"))
+                                    )]
                                     updated_log.to_csv(BOOKED_LOG_FILE, index=False)
 
-                                st.info(f"Marked group {group_id} as pending and removed log entry.")
+                                st.warning(f"Deleted booking and log for group {group_id}")
                                 time.sleep(1)
                                 st.rerun()
 
-
-                        if col3.button("🗑️ Delete Request", key=f"delete_{group_id}"):
-                            # Delete from vitatkal_requests.csv
-                            delete_booking(main_row.name)
-
-                            # Remove from booked_log.csv if present
-                            if os.path.exists(BOOKED_LOG_FILE):
-                                log_df = pd.read_csv(BOOKED_LOG_FILE)
-                                updated_log = log_df[~(
-                                    (log_df["Customer Name"] == main_row["Name"]) & 
-                                    (log_df["Date of Journey"] == pd.to_datetime(main_row["Date of Journey"]).strftime("%Y-%m-%d"))
-                                )]
-
-                                updated_log.to_csv(BOOKED_LOG_FILE, index=False)
-
-                            st.warning(f"Deleted booking and log for group {group_id}")
-                            time.sleep(1)
-                            st.rerun()
 
 
         with tab2:
@@ -342,17 +346,30 @@ if is_admin:
                     agent = st.selectbox("Agent", ["Aravind", "Nazmil", "Christy"])
                     profit = st.number_input("Profit (₹)", min_value=0.0, step=10.0)
 
+                    split_col1, split_col2, split_col3 = st.columns(3)
+                    split_aravind = split_col1.slider("Aravind (%)", 0, 100, 50)
+                    split_nazmil = split_col2.slider("Nazmil (%)", 0, 100, 25)
+                    split_christy = split_col3.slider("Christy (%)", 0, 100, 25)
+
+                    total_split = split_aravind + split_nazmil + split_christy
                     if st.form_submit_button("💾 Save Entry"):
-                        new_row = {
-                            "Customer Name": name,
-                            "Date of Journey": date.strftime("%Y-%m-%d"),
-                            "Agent": agent,
-                            "Profit": profit
-                        }
-                        log_df = pd.concat([log_df, pd.DataFrame([new_row])], ignore_index=True)
-                        log_df.to_csv(BOOKED_LOG_FILE, index=False)
-                        st.success("✅ Entry added.")
-                        st.rerun()
+                        if total_split != 100:
+                            st.warning("⚠️ Profit split must total 100%.")
+                        else:
+                            new_row = {
+                                "Customer Name": name,
+                                "Date of Journey": date.strftime("%Y-%m-%d"),
+                                "Agent": agent,
+                                "Profit": profit,
+                                "Split_Aravind": split_aravind / 100,
+                                "Split_Nazmil": split_nazmil / 100,
+                                "Split_Christy": split_christy / 100
+                            }
+                            log_df = pd.concat([log_df, pd.DataFrame([new_row])], ignore_index=True)
+                            log_df.to_csv(BOOKED_LOG_FILE, index=False)
+                            st.success("✅ Entry added.")
+                            st.rerun()
+
 
             # --- Edit Entry ---
             if st.session_state.show_edit_form:
@@ -369,18 +386,31 @@ if is_admin:
 
                     with st.form("edit_entry"):
                         name = st.text_input("Customer Name", value=row["Customer Name"])
-                        date = st.date_input("Date of Journey", value=row["Date of Journey"])
+                        date = st.date_input("Date of Journey", value=pd.to_datetime(row["Date of Journey"]))
                         agent = st.selectbox("Agent", ["Aravind", "Nazmil", "Christy"], index=["Aravind", "Nazmil", "Christy"].index(row["Agent"]))
                         profit = st.number_input("Profit (₹)", min_value=0.0, step=10.0, value=row["Profit"])
 
+                        split_col1, split_col2, split_col3 = st.columns(3)
+                        split_aravind = split_col1.slider("Aravind (%)", 0, 100, int(row.get("Split_Aravind", 0.0) * 100))
+                        split_nazmil = split_col2.slider("Nazmil (%)", 0, 100, int(row.get("Split_Nazmil", 0.0) * 100))
+                        split_christy = split_col3.slider("Christy (%)", 0, 100, int(row.get("Split_Christy", 0.0) * 100))
+
+                        total_split = split_aravind + split_nazmil + split_christy
                         if st.form_submit_button("💾 Update Entry"):
-                            log_df.at[selected_index, "Customer Name"] = name
-                            log_df.at[selected_index, "Date of Journey"] = date
-                            log_df.at[selected_index, "Agent"] = agent
-                            log_df.at[selected_index, "Profit"] = profit
-                            log_df.to_csv(BOOKED_LOG_FILE, index=False)
-                            st.success("✅ Entry updated.")
-                            st.rerun()
+                            if total_split != 100:
+                                st.warning("⚠️ Profit split must total 100%.")
+                            else:
+                                log_df.at[selected_index, "Customer Name"] = name
+                                log_df.at[selected_index, "Date of Journey"] = date
+                                log_df.at[selected_index, "Agent"] = agent
+                                log_df.at[selected_index, "Profit"] = profit
+                                log_df.at[selected_index, "Split_Aravind"] = split_aravind / 100
+                                log_df.at[selected_index, "Split_Nazmil"] = split_nazmil / 100
+                                log_df.at[selected_index, "Split_Christy"] = split_christy / 100
+                                log_df.to_csv(BOOKED_LOG_FILE, index=False)
+                                st.success("✅ Entry updated.")
+                                st.rerun()
+
 
             # --- Delete Entry ---
             if st.session_state.show_delete_form:
